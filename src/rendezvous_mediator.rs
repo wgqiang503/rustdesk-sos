@@ -1068,7 +1068,7 @@ impl RendezvousMediator {
             // closed session may never reach) leaking the pc, channels, and socket fds.
             let stream_for_cleanup = stream.clone();
             // SOS: WebRTC 可能是 TURN 中继，按实际 ICE 结果记录连接类型
-            let wr_relayed = stream.webrtc_relayed().await.unwrap_or(false);
+            let wr_relayed = stream.is_relayed().await.unwrap_or(false);
             crate::server::INCOMING_CONN_DIRECT.store(!wr_relayed, std::sync::atomic::Ordering::Relaxed);
             if let Err(err) = crate::server::create_tcp_connection(
                 server,
