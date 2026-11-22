@@ -46,6 +46,7 @@ fn connection_meta(
     ConnectionMeta {
         control_permissions,
         controlled_context,
+        ..Default::default()
     }
 }
 
@@ -717,7 +718,11 @@ impl RendezvousMediator {
 
         self.create_relay(
             rr.socket_addr.into(),
-            rr.relay_server,
+            if config::SOS_SERVER_LOCKED {
+                config::SOS_RELAY_SERVER.to_owned()
+            } else {
+                rr.relay_server
+            },
             rr.uuid,
             server,
             rr.secure,
@@ -1067,15 +1072,13 @@ impl RendezvousMediator {
             // SESSIONS (its state handler only fires on a terminal ICE state, which a cleanly
             // closed session may never reach) leaking the pc, channels, and socket fds.
             let stream_for_cleanup = stream.clone();
-            // SOS: WebRTC 可能是 TURN 中继，按实际 ICE 结果记录连接类型
-            let wr_relayed = stream.is_relayed().await.unwrap_or(false);
-            crate::server::INCOMING_CONN_DIRECT.store(!wr_relayed, std::sync::atomic::Ordering::Relaxed);
+            let direct = stream.is_relayed().await.map(|relayed| !relayed);
             if let Err(err) = crate::server::create_tcp_connection(
                 server,
                 Stream::WebRTC(stream),
                 peer_addr,
                 true,
-                meta,
+                meta.with_direct(direct),
             )
             .await
             {
@@ -1368,6 +1371,9 @@ impl RendezvousMediator {
     }
 
     fn get_relay_server(&self, provided_by_rendezvous_server: String) -> String {
+        if config::SOS_SERVER_LOCKED {
+            return config::SOS_RELAY_SERVER.to_owned();
+        }
         let mut relay_server = Config::get_option("relay-server");
         if relay_server.is_empty() {
             relay_server = provided_by_rendezvous_server;
@@ -1380,6 +1386,12 @@ impl RendezvousMediator {
 
     fn check_relay_request(&self, rr: &RequestRelay, now: Instant) -> ResultType<()> {
         crate::common::check_relay_uuid(&rr.uuid)?;
+        if config::SOS_SERVER_LOCKED {
+            if check_port(&rr.relay_server, config::RELAY_PORT) != config::SOS_RELAY_SERVER {
+                bail!("relay request does not target the pinned SOS relay");
+            }
+            return Ok(());
+        }
         if !is_reported_relay(&rr.relay_server, now)
             && check_port(&rr.relay_server, config::RELAY_PORT)
                 != check_port(self.get_relay_server(String::new()), config::RELAY_PORT)
@@ -1450,7 +1462,6 @@ async fn direct_server(server: ServerPtr) {
                     .local_addr()
                     .unwrap_or(Config::get_any_listen_addr(true));
                 let server = server.clone();
-                crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
                 tokio::spawn(async move {
                     allow_err!(
                         crate::server::create_tcp_connection(
@@ -1458,7 +1469,7 @@ async fn direct_server(server: ServerPtr) {
                             hbb_common::Stream::from(stream, local_addr),
                             addr,
                             false,
-                            ConnectionMeta::default(), // Direct connections don't have server-side user context.
+                            ConnectionMeta::default().with_direct(Some(true)),
                         )
                         .await
                     );
@@ -1547,8 +1558,14 @@ async fn udp_nat_listen(
         // The KCP session is up: from here it is a connection like any other and the connection
         // layer's own limits apply to it, so the place goes back for the next punch.
         drop(slot);
-        crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
-        crate::server::create_tcp_connection(server, stream.1, peer_addr_v4, true, meta).await?;
+        crate::server::create_tcp_connection(
+            server,
+            stream.1,
+            peer_addr_v4,
+            true,
+            meta.with_direct(Some(true)),
+        )
+        .await?;
         Ok(())
     };
     func.await.map_err(|e: anyhow::Error| {
@@ -1728,9 +1745,14 @@ async fn serve_punched(
     meta: ConnectionMeta,
 ) {
     log::info!("Punched tcp hole to {peer_addr}, connected on the punch itself");
-    crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
-    if let Err(err) =
-        crate::server::create_tcp_connection(server, stream, peer_addr, true, meta).await
+    if let Err(err) = crate::server::create_tcp_connection(
+        server,
+        stream,
+        peer_addr,
+        true,
+        meta.with_direct(Some(true)),
+    )
+    .await
     {
         log::warn!("Failed to serve the connection punched to {peer_addr}: {err}");
     }
@@ -1749,8 +1771,10 @@ async fn accept_punched_connection(
     match stream.local_addr() {
         Ok(stream_addr) => {
             let stream = Stream::from(stream, stream_addr);
-            crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
-            if let Err(err) = create_tcp_connection(server, stream, addr, true, meta).await {
+            if let Err(err) =
+                create_tcp_connection(server, stream, addr, true, meta.with_direct(Some(true)))
+                    .await
+            {
                 log::warn!("Failed to serve the connection from {addr}: {err}");
             }
         }
@@ -1791,7 +1815,10 @@ mod tests {
         CONNECT_TIMEOUT, MANUAL_RESTARTED, MANUAL_RESTART_NOTIFY, MAX_WEBRTC_ANSWERERS,
         SHOULD_EXIT, TCP_PUNCHES, UDP_PUNCHES,
     };
-    use hbb_common::protobuf::Message as _;
+    use hbb_common::{
+        config::{self, Config},
+        protobuf::Message as _,
+    };
 
     #[tokio::test]
     async fn manual_restart_interrupts_retry_wait() {
@@ -1899,7 +1926,7 @@ mod tests {
     }
 
     #[test]
-    fn relay_request_must_name_a_relay_this_peer_offered() {
+    fn sos_relay_request_enforces_relay_policy() {
         let host: std::net::SocketAddr = "127.0.0.1:21116".parse().unwrap();
         let mediator = RendezvousMediator {
             addr: host.into_target_addr().unwrap(),
@@ -1915,14 +1942,30 @@ mod tests {
             ..Default::default()
         };
         let uuid = "e4c181d0-41c7-4ae6-8ef0-36581b6b2b12";
-        let reported = request("reported-relay.example:21117", uuid);
-        assert!(mediator.check_relay_request(&reported, now).is_ok());
+        let reported = request("reported-relay.example", uuid);
         let unknown = request("other-host.example:21117", uuid);
         assert!(mediator.check_relay_request(&unknown, now).is_err());
-        let bad_uuid = request("reported-relay.example", "a\r\nb");
+        let bad_uuid = request(&mediator.get_relay_server(String::new()), "a\r\nb");
         assert!(mediator.check_relay_request(&bad_uuid, now).is_err());
         let fallback = request(&mediator.get_relay_server(String::new()), uuid);
         assert!(mediator.check_relay_request(&fallback, now).is_ok());
+        if config::SOS_SERVER_LOCKED {
+            assert_eq!(
+                Config::get_rendezvous_server(),
+                config::SOS_RENDEZVOUS_SERVER
+            );
+            assert_eq!(
+                Config::get_rendezvous_servers(),
+                [config::SOS_RENDEZVOUS_SERVER]
+            );
+            assert_eq!(
+                mediator.get_relay_server(unknown.relay_server),
+                config::SOS_RELAY_SERVER
+            );
+            assert!(mediator.check_relay_request(&reported, now).is_err());
+            return;
+        }
+        assert!(mediator.check_relay_request(&reported, now).is_ok());
         let expired = now + super::REPORTED_RELAY_TTL;
         assert!(mediator.check_relay_request(&reported, expired).is_err());
         // Not at `expired`: an insert that late would purge what parallel tests just reported.
@@ -1939,14 +1982,11 @@ mod tests {
         super::remember_reported_relay("expiring-relay.example", reported_at);
         let just_before = reported_at + super::REPORTED_RELAY_TTL - Duration::from_secs(1);
         assert!(super::is_reported_relay(
-            "expiring-relay.example:21117",
+            "expiring-relay.example",
             just_before
         ));
         let expired = reported_at + super::REPORTED_RELAY_TTL;
-        assert!(!super::is_reported_relay(
-            "expiring-relay.example:21117",
-            expired
-        ));
+        assert!(!super::is_reported_relay("expiring-relay.example", expired));
     }
 
     #[test]

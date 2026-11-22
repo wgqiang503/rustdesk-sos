@@ -90,6 +90,14 @@ type ConnMap = HashMap<i32, ConnInner>;
 pub struct ConnectionMeta {
     pub control_permissions: Option<ControlPermissions>,
     pub controlled_context: Option<ControlledContext>,
+    pub direct: Option<bool>,
+}
+
+impl ConnectionMeta {
+    pub(crate) fn with_direct(mut self, direct: Option<bool>) -> Self {
+        self.direct = direct;
+        self
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -109,10 +117,6 @@ lazy_static::lazy_static! {
     // Now we use this [`CLIENT_SERVER`] to do following operations:
     // - record local audio, and send to remote
     pub static ref CLIENT_SERVER: ServerPtr = new();
-    // SOS: 最近一次被控连接的网络类型。false=中继(默认)，直连路径会置为 true。
-    // 主界面每秒通过 IPC 读取该值，用于显示「P2P直连 / 中继」。
-    pub static ref INCOMING_CONN_DIRECT: std::sync::atomic::AtomicBool =
-        std::sync::atomic::AtomicBool::new(false);
 }
 
 pub struct Server {
@@ -202,13 +206,12 @@ async fn accept_connection_(
         drop(slot);
         stream.set_nodelay(true).ok();
         let stream_addr = stream.local_addr()?;
-        INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
         create_tcp_connection(
             server,
             Stream::from(stream, stream_addr),
             addr,
             secure,
-            meta,
+            meta.with_direct(Some(true)),
         )
         .await?;
     }
@@ -425,7 +428,14 @@ async fn create_relay_connection_(
         ..Default::default()
     });
     stream.send(&msg_out).await?;
-    create_tcp_connection(server, stream, peer_addr, secure, meta).await?;
+    create_tcp_connection(
+        server,
+        stream,
+        peer_addr,
+        secure,
+        meta.with_direct(Some(false)),
+    )
+    .await?;
     Ok(())
 }
 

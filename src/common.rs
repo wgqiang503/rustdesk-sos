@@ -798,6 +798,9 @@ async fn test_nat_type_() -> ResultType<bool> {
 }
 
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>, bool) {
+    if config::SOS_SERVER_LOCKED {
+        return (Config::get_rendezvous_server(), Vec::new(), true);
+    }
     #[cfg(any(target_os = "android", target_os = "ios"))]
     let (mut a, mut b) = get_rendezvous_server_(ms_timeout);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -1260,6 +1263,9 @@ pub fn is_setup(name: &str) -> bool {
 }
 
 pub fn get_custom_rendezvous_server(custom: String) -> String {
+    if config::SOS_SERVER_LOCKED {
+        return Config::get_rendezvous_server();
+    }
     #[cfg(windows)]
     if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
         if !lic.host.is_empty() {
@@ -1277,7 +1283,7 @@ pub fn get_custom_rendezvous_server(custom: String) -> String {
 
 #[inline]
 pub fn get_api_server(api: String, custom: String) -> String {
-    if Config::no_register_device() {
+    if config::SOS_SERVER_LOCKED || Config::no_register_device() {
         return "".to_owned();
     }
     let mut res = get_api_server_(api, custom);
@@ -2165,6 +2171,9 @@ pub fn decode64<T: AsRef<[u8]>>(input: T) -> Result<Vec<u8>, base64::DecodeError
 }
 
 pub async fn get_key(sync: bool) -> String {
+    if config::SOS_SERVER_LOCKED {
+        return config::RS_PUB_KEY.to_owned();
+    }
     #[cfg(windows)]
     if let Ok(lic) = crate::platform::windows::get_license_from_exe_name() {
         if !lic.key.is_empty() {
@@ -2525,6 +2534,16 @@ pub fn load_custom_client() {
         .write()
         .unwrap()
         .insert("conn-type".to_owned(), "incoming".to_owned());
+    if config::SOS_SERVER_LOCKED {
+        let mut settings = config::BUILTIN_SETTINGS.write().unwrap();
+        for key in [
+            "hide-server-settings",
+            "hide-proxy-settings",
+            "hide-websocket-settings",
+        ] {
+            settings.insert(key.to_owned(), "Y".to_owned());
+        }
+    }
     // 品牌名称（会出现在窗口标题、托盘、关于页）
     *config::APP_NAME.write().unwrap() = "美铭远程协助 SOS（被控端）".to_owned();
 }
@@ -2606,6 +2625,10 @@ pub fn get_dst_align_rgba() -> usize {
 }
 
 pub fn read_custom_client(config: &str) {
+    if config::SOS_SERVER_LOCKED {
+        load_custom_client();
+        return;
+    }
     let Ok(data) = decode64(config) else {
         log::error!("Failed to decode custom client config");
         return;

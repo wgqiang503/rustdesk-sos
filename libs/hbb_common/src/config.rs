@@ -113,7 +113,10 @@ const CHARS: &[char] = &[
     'm', 'n', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z',
 ];
 
-pub const RENDEZVOUS_SERVERS: &[&str] = &["yc.561766.xyz:52226"];
+pub const SOS_SERVER_LOCKED: bool = cfg!(feature = "sos-server");
+pub const SOS_RENDEZVOUS_SERVER: &str = "yc.561766.xyz:52226";
+pub const SOS_RELAY_SERVER: &str = "yc.561766.xyz:52227";
+pub const RENDEZVOUS_SERVERS: &[&str] = &[SOS_RENDEZVOUS_SERVER];
 pub const RS_PUB_KEY: &str = "vUzL1Q5UWRcXtj5UkKvI146+J9TGqur6MDMClFGguIk=";
 
 pub const RENDEZVOUS_PORT: i32 = 52226;
@@ -1047,6 +1050,9 @@ impl Config {
     }
 
     pub fn get_rendezvous_server() -> String {
+        if SOS_SERVER_LOCKED {
+            return SOS_RENDEZVOUS_SERVER.to_owned();
+        }
         let mut rendezvous_server = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
         if rendezvous_server.is_empty() {
             rendezvous_server = Self::get_option("custom-rendezvous-server");
@@ -1070,6 +1076,9 @@ impl Config {
     }
 
     pub fn get_rendezvous_servers() -> Vec<String> {
+        if SOS_SERVER_LOCKED {
+            return vec![SOS_RENDEZVOUS_SERVER.to_owned()];
+        }
         let s = EXE_RENDEZVOUS_SERVER.read().unwrap().clone();
         if !s.is_empty() {
             return vec![s];
@@ -1672,6 +1681,9 @@ impl Config {
     }
 
     pub fn get_socks() -> Option<Socks5Server> {
+        if SOS_SERVER_LOCKED {
+            return None;
+        }
         Self::get_socks_from_custom_client_advanced_settings(&OVERWRITE_SETTINGS.read().unwrap())
             .or(CONFIG2.read().unwrap().socks.clone())
             .or(Self::get_socks_from_custom_client_advanced_settings(
@@ -1685,6 +1697,9 @@ impl Config {
     }
 
     pub fn get_network_type() -> NetworkType {
+        if SOS_SERVER_LOCKED {
+            return NetworkType::Direct;
+        }
         if OVERWRITE_SETTINGS
             .read()
             .unwrap()
@@ -2936,6 +2951,9 @@ pub fn option2bool(option: &str, value: &str) -> bool {
 }
 
 pub fn use_ws() -> bool {
+    if SOS_SERVER_LOCKED {
+        return false;
+    }
     let option = keys::OPTION_ALLOW_WEBSOCKET;
     option2bool(option, &Config::get_option(option))
 }
@@ -3501,8 +3519,49 @@ mod tests {
         assert_eq!(cfg.salt, "new-salt");
     }
 
+    #[cfg(feature = "sos-server")]
+    #[test]
+    fn sos_server_ignores_network_overrides() {
+        let _guard = CONFIG_STATE_TEST_LOCK.lock().unwrap();
+        let overrides = HashMap::from([
+            (
+                "custom-rendezvous-server".to_owned(),
+                "other.example:9000".to_owned(),
+            ),
+            (keys::OPTION_ALLOW_WEBSOCKET.to_owned(), "Y".to_owned()),
+            (
+                keys::OPTION_PROXY_URL.to_owned(),
+                "127.0.0.1:1080".to_owned(),
+            ),
+        ]);
+        let original_settings =
+            std::mem::replace(&mut *OVERWRITE_SETTINGS.write().unwrap(), overrides);
+        let original_exe_server = std::mem::replace(
+            &mut *EXE_RENDEZVOUS_SERVER.write().unwrap(),
+            "exe.example:9000".to_owned(),
+        );
+
+        let server = Config::get_rendezvous_server();
+        let servers = Config::get_rendezvous_servers();
+        let socks = Config::get_socks();
+        let network_type = Config::get_network_type();
+        let websocket = use_ws();
+        let ws_target = crate::websocket::check_ws(SOS_RENDEZVOUS_SERVER);
+
+        *EXE_RENDEZVOUS_SERVER.write().unwrap() = original_exe_server;
+        *OVERWRITE_SETTINGS.write().unwrap() = original_settings;
+
+        assert_eq!(server, SOS_RENDEZVOUS_SERVER);
+        assert_eq!(servers, [SOS_RENDEZVOUS_SERVER]);
+        assert!(socks.is_none());
+        assert_eq!(network_type, NetworkType::Direct);
+        assert!(!websocket);
+        assert_eq!(ws_target, SOS_RENDEZVOUS_SERVER);
+    }
+
     #[test]
     fn test_overwrite_settings() {
+        let _guard = CONFIG_STATE_TEST_LOCK.lock().unwrap();
         DEFAULT_SETTINGS
             .write()
             .unwrap()

@@ -579,6 +579,7 @@ mod proxy_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(feature = "sos-server"))]
     use crate::config::{keys, Config};
     use tokio::{io::AsyncWriteExt, net::TcpListener};
     use tungstenite::protocol::Role;
@@ -623,6 +624,7 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[cfg(not(feature = "sos-server"))]
     #[test]
     fn test_check_ws() {
         let options = Config::get_options();

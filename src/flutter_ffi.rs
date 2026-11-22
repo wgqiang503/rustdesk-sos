@@ -3100,7 +3100,9 @@ pub mod server_side {
         }
         #[cfg(not(debug_assertions))]
         crate::platform::android_log::initialize();
-        if let Ok(custom_client_config) = env.get_string(&custom_client_config) {
+        if config::SOS_SERVER_LOCKED {
+            crate::load_custom_client();
+        } else if let Ok(custom_client_config) = env.get_string(&custom_client_config) {
             if !custom_client_config.is_empty() {
                 let custom_client_config: String = custom_client_config.into();
                 crate::read_custom_client(&custom_client_config);

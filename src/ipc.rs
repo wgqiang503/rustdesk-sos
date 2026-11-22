@@ -496,7 +496,7 @@ pub enum Data {
     CheckHwcodec,
     #[cfg(feature = "flutter")]
     VideoConnCount(Option<usize>),
-    // SOS: 被控连接的网络类型：Some(true)=P2P直连, Some(false)=中继, None=当前无被控会话
+    // SOS: true = direct, false = relay, None = absent, unknown, or mixed.
     #[cfg(feature = "flutter")]
     IncomingConnDirect(Option<bool>),
     // Although the key is not necessary, it is used to avoid hardcoding the key.
@@ -964,16 +964,8 @@ async fn handle(data: Data, stream: &mut Connection) {
         }
         #[cfg(feature = "flutter")]
         Data::IncomingConnDirect(None) => {
-            let has_remote = crate::server::AUTHED_CONNS
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|x| x.conn_type == crate::server::AuthConnType::Remote);
-            let value = if has_remote {
-                Some(crate::server::INCOMING_CONN_DIRECT.load(std::sync::atomic::Ordering::Relaxed))
-            } else {
-                None
-            };
+            let value =
+                crate::server::common_remote_direct(&crate::server::AUTHED_CONNS.lock().unwrap());
             allow_err!(stream.send(&Data::IncomingConnDirect(value)).await);
         }
         Data::Config((name, value)) => match value {
@@ -2010,6 +2002,12 @@ pub fn get_id() -> String {
 }
 
 pub async fn get_rendezvous_server(ms_timeout: u64) -> (String, Vec<String>) {
+    if config::SOS_SERVER_LOCKED {
+        return (
+            Config::get_rendezvous_server(),
+            Config::get_rendezvous_servers(),
+        );
+    }
     if let Ok(Some(v)) = get_config_async("rendezvous_server", ms_timeout).await {
         let mut urls = v.split(",");
         let a = urls.next().unwrap_or_default().to_owned();
@@ -2107,6 +2105,9 @@ pub async fn get_nat_type(ms_timeout: u64) -> i32 {
 }
 
 pub async fn get_rendezvous_servers(ms_timeout: u64) -> Vec<String> {
+    if config::SOS_SERVER_LOCKED {
+        return Config::get_rendezvous_servers();
+    }
     if let Ok(Some(v)) = get_config_async("rendezvous_servers", ms_timeout).await {
         return v.split(',').map(|x| x.to_owned()).collect();
     }

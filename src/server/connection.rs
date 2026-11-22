@@ -440,6 +440,7 @@ pub struct Connection {
     start_cm_ipc_para: Option<StartCmIpcPara>,
     auto_disconnect_timer: Option<(Instant, u64)>,
     authed_conn_id: Option<self::raii::AuthedConnID>,
+    direct: Option<bool>,
     file_remove_log_control: FileRemoveLogControl,
     last_supported_encoding: Option<SupportedEncoding>,
     services_subed: bool,
@@ -541,6 +542,7 @@ impl Connection {
         let super::ConnectionMeta {
             control_permissions,
             controlled_context,
+            direct,
         } = meta;
         // Android is not supported yet, so we always set control_permissions to None.
         #[cfg(target_os = "android")]
@@ -652,6 +654,7 @@ impl Connection {
             }),
             auto_disconnect_timer: None,
             authed_conn_id: None,
+            direct,
             file_remove_log_control: FileRemoveLogControl::new(id),
             last_supported_encoding: None,
             services_subed: false,
@@ -1966,6 +1969,7 @@ impl Connection {
             self.session_key(),
             self.tx_from_authed.clone(),
             self.lr.clone(),
+            self.direct,
         ));
         self.session_last_recv_time = SESSIONS
             .lock()
@@ -7006,6 +7010,14 @@ pub struct AuthedConn {
     pub session_key: SessionKey,
     pub sender: mpsc::UnboundedSender<Data>,
     pub printer: bool,
+    direct: Option<bool>,
+}
+
+#[cfg(any(feature = "flutter", test))]
+pub(crate) fn common_remote_direct(conns: &[AuthedConn]) -> Option<bool> {
+    let mut remote = conns.iter().filter(|c| c.conn_type == AuthConnType::Remote);
+    let direct = remote.next()?.direct?;
+    remote.all(|c| c.direct == Some(direct)).then_some(direct)
 }
 
 mod raii {
@@ -7054,6 +7066,7 @@ mod raii {
             session_key: SessionKey,
             sender: mpsc::UnboundedSender<Data>,
             lr: LoginRequest,
+            direct: Option<bool>,
         ) -> Self {
             let printer = conn_type == crate::server::AuthConnType::Remote
                 && crate::is_support_remote_print(&lr.version)
@@ -7064,6 +7077,7 @@ mod raii {
                 session_key,
                 sender,
                 printer,
+                direct,
             });
             Self::check_wake_lock();
             use std::sync::Once;
@@ -7999,6 +8013,7 @@ mod test {
             session_key,
             sender: mpsc::unbounded_channel().0,
             printer: false,
+            direct: None,
         };
         let mine = key(7, "peer");
         let remote = AuthConnType::Remote;
@@ -8017,5 +8032,38 @@ mod test {
         // is all three fields, and either of those is someone else's screen to lock.
         assert!(!replaced_by(&conn(3, remote, key(8, "peer")), 2, &mine));
         assert!(!replaced_by(&conn(3, remote, key(7, "other")), 2, &mine));
+    }
+
+    #[test]
+    fn sos_transport_reports_only_unanimous_authenticated_remote_sessions() {
+        let conn = |conn_id, conn_type, direct| AuthedConn {
+            conn_id,
+            conn_type,
+            direct,
+            session_key: SessionKey {
+                peer_id: String::new(),
+                name: String::new(),
+                session_id: 0,
+            },
+            sender: mpsc::unbounded_channel().0,
+            printer: false,
+        };
+        let remote = AuthConnType::Remote;
+        let mut conns = vec![conn(1, AuthConnType::Terminal, Some(false))];
+        assert_eq!(common_remote_direct(&conns), None);
+        conns.push(conn(2, remote, Some(true)));
+        assert_eq!(common_remote_direct(&conns), Some(true));
+        conns.push(conn(3, remote, Some(true)));
+        assert_eq!(common_remote_direct(&conns), Some(true));
+        conns.push(conn(4, remote, Some(false)));
+        assert_eq!(common_remote_direct(&conns), None);
+        conns.retain(|c| c.direct != Some(true));
+        assert_eq!(common_remote_direct(&conns), Some(false));
+        conns.push(conn(5, remote, None));
+        assert_eq!(common_remote_direct(&conns), None);
+        conns.retain(|c| c.direct.is_none());
+        assert_eq!(common_remote_direct(&conns), None);
+        conns.clear();
+        assert_eq!(common_remote_direct(&conns), None);
     }
 }
