@@ -2767,10 +2767,19 @@ void changeUnlockPinDialog(String oldPin, Function() callback) {
   });
 }
 
-void checkUnlockPinDialog(String correctPin, Function() passCallback) {
+Future<bool> requestDesktopSettingsUnlock() async {
+  final unlockPin = bind.mainGetUnlockPin();
+  if (unlockPin.isEmpty || isUnlockPinDisabled()) {
+    return callMainCheckSuperUserPermission();
+  }
+  return await checkUnlockPinDialog(unlockPin) == true;
+}
+
+Future<bool?> checkUnlockPinDialog(String correctPin,
+    [Function()? passCallback]) {
   final controller = TextEditingController();
   String? errorText;
-  gFFI.dialogManager.show((setState, close, context) {
+  return gFFI.dialogManager.show<bool>((setState, close, context) {
     submit() async {
       final pin = controller.text.trim();
       if (correctPin != pin) {
@@ -2779,8 +2788,8 @@ void checkUnlockPinDialog(String correctPin, Function() passCallback) {
         });
         return;
       }
-      passCallback.call();
-      close();
+      passCallback?.call();
+      close(true);
     }
 
     return CustomAlertDialog(

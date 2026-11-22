@@ -12,6 +12,8 @@ import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
+import 'package:flutter_hbb/desktop/widgets/sos_password_board.dart';
+import 'package:flutter_hbb/desktop/widgets/sos_settings_target.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
@@ -54,6 +56,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   final RxBool _block = false.obs;
 
   final GlobalKey _childKey = GlobalKey();
+  late final bool _sosHome = bind.isIncomingOnly() &&
+      bind.mainGetBuildinOption(key: 'sos-compact-home') == 'Y';
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +84,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     final isOutgoingOnly = bind.isOutgoingOnly();
     final children = <Widget>[
       if (!isOutgoingOnly) buildPresetPasswordWarning(),
-      if (bind.isCustomClient())
+      if (bind.isCustomClient() && !_sosHome)
         Align(
           alignment: Alignment.center,
           child: loadPowered(context),
@@ -125,6 +129,21 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         ).marginOnly(bottom: 6, right: 6)
       ]);
     }
+    final content = Column(key: _childKey, children: children);
+    final scrollView = SingleChildScrollView(
+      controller: _leftPaneScrollController,
+      child: _sosHome
+          ? NotificationListener<SizeChangedLayoutNotification>(
+              onNotification: (_) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted && isInHomePage()) _updateWindowSize();
+                });
+                return true;
+              },
+              child: SizeChangedLayoutNotifier(child: content),
+            )
+          : content,
+    );
     final textColor = Theme.of(context).textTheme.titleLarge?.color;
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
@@ -135,14 +154,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
           children: [
             Column(
               children: [
-                SingleChildScrollView(
-                  controller: _leftPaneScrollController,
-                  child: Column(
-                    key: _childKey,
-                    children: children,
-                  ),
-                ),
-                Expanded(child: Container())
+                if (_sosHome)
+                  Expanded(child: scrollView)
+                else ...[
+                  scrollView,
+                  Expanded(child: Container()),
+                ],
               ],
             ),
             if (isOutgoingOnly)
@@ -254,6 +271,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   Widget buildPopupMenu(BuildContext context) {
+    if (_sosHome) {
+      return SosSettingsTarget(
+        label: translate('Settings'),
+        onOpen: bind.isDisableSettings() ? null : DesktopTabPage.onAddSetting,
+      );
+    }
     final textColor = Theme.of(context).textTheme.titleLarge?.color;
     RxBool hover = false.obs;
     return InkWell(
@@ -283,6 +306,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         value: gFFI.serverModel,
         child: Consumer<ServerModel>(
           builder: (context, model, child) {
+            if (_sosHome) return SosPasswordBoard(model: model);
             return buildPasswordBoard2(context, model);
           },
         ));
@@ -401,7 +425,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
                 Align(
                   alignment: Alignment.centerLeft,
                   child: Text(
-                    translate("Your Desktop"),
+                    _sosHome ? '美铭远程协助(自编被控端)' : translate("Your Desktop"),
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
@@ -471,6 +495,28 @@ class _DesktopHomePageState extends State<DesktopHomePage>
 
     if (isWindows && !bind.isDisableInstallation()) {
       if (!bind.mainIsInstalled()) {
+        if (_sosHome) {
+          return Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text('你正在运行未安装版',
+                      style: Theme.of(context).textTheme.bodySmall),
+                ),
+                TextButton(
+                  style: TextButton.styleFrom(
+                      visualDensity: VisualDensity.compact),
+                  onPressed: () async {
+                    await rustDeskWinManager.closeAllSubWindows();
+                    bind.mainGotoInstall();
+                  },
+                  child: Text(translate('Install')),
+                ),
+              ],
+            ),
+          );
+        }
         return buildInstallCard(
             "", bind.isOutgoingOnly() ? "" : "install_tip", "Install",
             () async {

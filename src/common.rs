@@ -2540,6 +2540,7 @@ pub fn load_custom_client() {
             "hide-server-settings",
             "hide-proxy-settings",
             "hide-websocket-settings",
+            "sos-compact-home",
         ] {
             settings.insert(key.to_owned(), "Y".to_owned());
         }
