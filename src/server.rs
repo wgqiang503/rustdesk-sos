@@ -109,6 +109,10 @@ lazy_static::lazy_static! {
     // Now we use this [`CLIENT_SERVER`] to do following operations:
     // - record local audio, and send to remote
     pub static ref CLIENT_SERVER: ServerPtr = new();
+    // SOS: 最近一次被控连接的网络类型。false=中继(默认)，直连路径会置为 true。
+    // 主界面每秒通过 IPC 读取该值，用于显示「P2P直连 / 中继」。
+    pub static ref INCOMING_CONN_DIRECT: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 }
 
 pub struct Server {
@@ -198,6 +202,7 @@ async fn accept_connection_(
         drop(slot);
         stream.set_nodelay(true).ok();
         let stream_addr = stream.local_addr()?;
+        INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
         create_tcp_connection(
             server,
             Stream::from(stream, stream_addr),

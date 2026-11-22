@@ -496,6 +496,9 @@ pub enum Data {
     CheckHwcodec,
     #[cfg(feature = "flutter")]
     VideoConnCount(Option<usize>),
+    // SOS: 被控连接的网络类型：Some(true)=P2P直连, Some(false)=中继, None=当前无被控会话
+    #[cfg(feature = "flutter")]
+    IncomingConnDirect(Option<bool>),
     // Although the key is not necessary, it is used to avoid hardcoding the key.
     WaylandScreencastRestoreToken((String, String)),
     HwCodecConfig(Option<String>),
@@ -958,6 +961,20 @@ async fn handle(data: Data, stream: &mut Connection) {
                 .filter(|x| x.conn_type == crate::server::AuthConnType::Remote)
                 .count();
             allow_err!(stream.send(&Data::VideoConnCount(Some(n))).await);
+        }
+        #[cfg(feature = "flutter")]
+        Data::IncomingConnDirect(None) => {
+            let has_remote = crate::server::AUTHED_CONNS
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|x| x.conn_type == crate::server::AuthConnType::Remote);
+            let value = if has_remote {
+                Some(crate::server::INCOMING_CONN_DIRECT.load(std::sync::atomic::Ordering::Relaxed))
+            } else {
+                None
+            };
+            allow_err!(stream.send(&Data::IncomingConnDirect(value)).await);
         }
         Data::Config((name, value)) => match value {
             None => {

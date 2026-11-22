@@ -2516,25 +2516,17 @@ pub fn rustdesk_interval(i: Interval) -> ThrottledInterval {
 }
 
 pub fn load_custom_client() {
-    #[cfg(debug_assertions)]
-    if let Ok(data) = std::fs::read_to_string("./custom.txt") {
-        read_custom_client(data.trim());
-        return;
-    }
-    let Some(path) = std::env::current_exe().map_or(None, |x| x.parent().map(|x| x.to_path_buf()))
-    else {
-        return;
-    };
-    #[cfg(target_os = "macos")]
-    let path = path.join("../Resources");
-    let path = path.join("custom.txt");
-    if path.is_file() {
-        let Ok(data) = std::fs::read_to_string(&path) else {
-            log::error!("Failed to read custom client config");
-            return;
-        };
-        read_custom_client(&data.trim());
-    }
+    // === SOS 被控端硬编码配置（编译期固化，不读取外部 custom.txt）===
+    // conn-type=incoming 启用 RustDesk 官方内置的纯被控模式：
+    //   1) 界面自动精简为「本机 ID + 一次性随机密码 + 固定密码开关 + 连接状态」
+    //   2) 主界面不渲染主控面板（ConnectionPage），无法主动发起连接
+    //   3) Rust 层拒绝任何 outgoing 连接（client.rs 内已有 is_incoming_only 判断）
+    config::HARD_SETTINGS
+        .write()
+        .unwrap()
+        .insert("conn-type".to_owned(), "incoming".to_owned());
+    // 品牌名称（会出现在窗口标题、托盘、关于页）
+    *config::APP_NAME.write().unwrap() = "美铭远程协助 SOS（被控端）".to_owned();
 }
 
 fn read_custom_client_advanced_settings(

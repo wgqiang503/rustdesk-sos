@@ -18,6 +18,8 @@ class StateGlobal {
   final RxBool showRemoteToolBar = false.obs;
   final svcStatus = SvcStatus.notReady.obs;
   final RxInt videoConnCount = 0.obs;
+  // SOS: 当前被控连接类型：null=无会话, true=P2P直连, false=中继
+  final Rxn<bool> incomingConnDirect = Rxn<bool>();
   final RxBool isFocused = false.obs;
   // for mobile and web
   bool isInMainPage = true;

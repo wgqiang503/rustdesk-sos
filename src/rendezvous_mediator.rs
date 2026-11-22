@@ -1067,6 +1067,9 @@ impl RendezvousMediator {
             // SESSIONS (its state handler only fires on a terminal ICE state, which a cleanly
             // closed session may never reach) leaking the pc, channels, and socket fds.
             let stream_for_cleanup = stream.clone();
+            // SOS: WebRTC 可能是 TURN 中继，按实际 ICE 结果记录连接类型
+            let wr_relayed = stream.webrtc_relayed().await.unwrap_or(false);
+            crate::server::INCOMING_CONN_DIRECT.store(!wr_relayed, std::sync::atomic::Ordering::Relaxed);
             if let Err(err) = crate::server::create_tcp_connection(
                 server,
                 Stream::WebRTC(stream),
@@ -1447,6 +1450,7 @@ async fn direct_server(server: ServerPtr) {
                     .local_addr()
                     .unwrap_or(Config::get_any_listen_addr(true));
                 let server = server.clone();
+                crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
                 tokio::spawn(async move {
                     allow_err!(
                         crate::server::create_tcp_connection(
@@ -1543,6 +1547,7 @@ async fn udp_nat_listen(
         // The KCP session is up: from here it is a connection like any other and the connection
         // layer's own limits apply to it, so the place goes back for the next punch.
         drop(slot);
+        crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
         crate::server::create_tcp_connection(server, stream.1, peer_addr_v4, true, meta).await?;
         Ok(())
     };
@@ -1723,6 +1728,7 @@ async fn serve_punched(
     meta: ConnectionMeta,
 ) {
     log::info!("Punched tcp hole to {peer_addr}, connected on the punch itself");
+    crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
     if let Err(err) =
         crate::server::create_tcp_connection(server, stream, peer_addr, true, meta).await
     {
@@ -1743,6 +1749,7 @@ async fn accept_punched_connection(
     match stream.local_addr() {
         Ok(stream_addr) => {
             let stream = Stream::from(stream, stream_addr);
+            crate::server::INCOMING_CONN_DIRECT.store(true, std::sync::atomic::Ordering::Relaxed);
             if let Err(err) = create_tcp_connection(server, stream, addr, true, meta).await {
                 log::warn!("Failed to serve the connection from {addr}: {err}");
             }

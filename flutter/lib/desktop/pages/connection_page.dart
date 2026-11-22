@@ -155,7 +155,7 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
 
   _buildConnStatusMsg() {
     widget.onSvcStatusChanged?.call();
-    return Text(
+    final statusText = Text(
       _svcStopped.value
           ? translate("Service is not running")
           : stateGlobal.svcStatus.value == SvcStatus.connecting
@@ -165,6 +165,22 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
                   : translate('Ready'),
       style: TextStyle(fontSize: em),
     );
+    // SOS: 仅被控端、且当前有远程会话时，显示 P2P直连 / 中继
+    final direct = stateGlobal.incomingConnDirect.value;
+    if (bind.isIncomingOnly() && direct != null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          statusText,
+          Text(
+            direct ? '连接类型：P2P 直连' : '连接类型：中继转发',
+            style: TextStyle(fontSize: em - 2, color: Colors.grey),
+          ),
+        ],
+      );
+    }
+    return statusText;
   }
 
   updateStatus() async {
@@ -183,6 +199,11 @@ class _OnlineStatusWidgetState extends State<OnlineStatusWidget> {
     _svcIsUsingPublicServer.value = await bind.mainIsUsingPublicServer();
     try {
       stateGlobal.videoConnCount.value = status['video_conn_count'] as int;
+    } catch (_) {}
+    // SOS: 解析被控连接类型（P2P直连 / 中继）
+    try {
+      final v = status['incoming_conn_direct'];
+      stateGlobal.incomingConnDirect.value = v == null ? null : v as bool;
     } catch (_) {}
   }
 }
